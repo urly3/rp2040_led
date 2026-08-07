@@ -1,21 +1,19 @@
 MEMORY
 {
-    RAM (rwx) : ORIGIN = 0x20000000, LENGTH = 264K
+    SRAM4 (rwx) : ORIGIN = 0x20040000, LENGTH = 4K
 }
 
 SECTIONS
 {
     .text : {
-        KEEP(*(.vectors))   /* Place vector table at absolute start */
-        *(.text*)           /* Program code execution statements */
-        *(.rodata*)         /* Constants, strings, and read-only vars */
-    } > RAM
+        KEEP(*(.vectors))
+        *(.text*)
+        *(.rodata*)
+    } > SRAM4
 
-    /* ARM stack unwinding and exception tracking tables */
-    .ARM.extab : { *(.ARM.extab* .gnu.linkonce.armextab.*) } > RAM
-    .ARM.exidx : { *(.ARM.exidx* .gnu.linkonce.armexidx.*) } > RAM
-
-    /* Handle standard uninitialised global data areas */
-    .data : { *(.data*) } > RAM
-    .bss  : { *(.bss*)  } > RAM
+    /DISCARD/ : {
+        *(.ARM.exidx*)
+        *(.ARM.extab*)
+    }
 }
+
