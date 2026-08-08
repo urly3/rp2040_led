@@ -1,52 +1,53 @@
 import struct
-import sys
 import os
+import sys
 
-# UF2 Architectural Magic Constants
 MAGIC_START_0 = 0x0A324655
 MAGIC_START_1 = 0x9E5D5157
 MAGIC_END     = 0x0AB16F30
-RP2040_FAMILY = 0xe48bff56  # The ID that tells the chip this is an RP2040 binary
-TARGET_ADDR = 0x20040000  # Map directly to Scratchpad RAM Bank 4!
+RP2040_FAMILY = 0xe48bff56  
+BASE_RAM_ADDR = 0x20000000  
 
 def create_uf2(bin_path, uf2_path):
     if not os.path.exists(bin_path):
-        print(f"Error: {bin_path} not found. Did you compile your project?")
+        print(f"Error: {bin_path} not found.")
         sys.exit(1)
         
     with open(bin_path, "rb") as f:
         data = f.read()
 
-    # Split the raw binary into sequential 256-byte data payloads
-    chunks = [data[i:i+256] for i in range(0, len(data), 256)]
+    # Split the raw binary into clean 256-byte data chunks
+    chunks = []
+    for i in range(0, len(data), 256):
+        chunk = data[i:i+256]
+        if len(chunk) < 256:
+            chunk = chunk.ljust(256, b'\x00')
+        chunks.append(chunk)
+        
     num_blocks = len(chunks)
+    print(f"Custom Packing: {len(data)} bytes into {num_blocks} perfect sectors...")
 
-    print(f"Packaging {len(data)} bytes into {num_blocks} UF2 blocks...")
+    # The 216-byte padding that guarantees a standard 512-byte hardware sector layout grid
+    datapadding = b'\x00' * (512 - 256 - 32 - 4)
 
     with open(uf2_path, "wb") as out:
         for block_no, chunk in enumerate(chunks):
-            # Pad the final block with null bytes if it's shorter than 256 bytes
-            chunk = chunk.ljust(256, b'\x00')
-            
-            # Flags: 0x00002000 dictates that the structural 'Family ID' field is present
             flags = 0x00002000 
-            addr = TARGET_ADDR + (block_no * 256)
+            addr = BASE_RAM_ADDR + (block_no * 256)
 
-            # Pack the 32-byte header according to the hardware specification layout
+            # Pack 32-byte header block
             header = struct.pack(
                 "<IIIIIIII",
                 MAGIC_START_0, MAGIC_START_1, flags, addr,
                 256, block_no, num_blocks, RP2040_FAMILY
             )
             
-            # Construct the complete 512-byte structural UF2 record block
-            block = header + chunk
-            block += b'\x00' * (476 - len(block))  # Pad interior out to the tail marker
-            block += struct.pack("<I", MAGIC_END)  # Affix final closing magic tag
-            
+            # Form complete 512-byte block structure: Header + Data + Padding + Footer
+            block = header + chunk + datapadding + struct.pack("<I", MAGIC_END)
+            assert len(block) == 512
             out.write(block)
 
 if __name__ == "__main__":
-    create_uf2("blink.bin", "blink.uf2")
-    print("Successfully created blink.uf2! Ready to flash.")
-
+    # CRITICAL TRACKING: Read and write directly from the root directory
+    create_uf2("zig-out/blink.bin", "zig-out/blink.uf2")
+    print("Standalone creation successful!")
