@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
     const bin_conversion = exe.addObjCopy(.{ .format = .bin });
     const install_bin = b.addInstallFile(bin_conversion.getOutput(), "blink.bin");
 
-    const uf2_step = b.step("make_uf2", "");
+    const uf2_step = b.step("make_uf2", "Generate uf2 file from the raw binary");
     uf2_step.makeFn = &uf2_make_fn;
 
     uf2_step.dependOn(&install_bin.step);

@@ -1,79 +1,131 @@
 const volatileWrite = @import("std").mem.doNotOptimizeAway;
 
-// Memory Mapped Registers Base Definitions
-const RESETS_BASE: usize = 0x4000c000;
-const RESETS_RESET: *volatile u32 = @ptrFromInt(RESETS_BASE + 0x0);
-const RESETS_DONE: *volatile u32 = @ptrFromInt(RESETS_BASE + 0x8);
+const ResetsRegs = packed struct(u32) {
+    g0: u1,
+    g1: u1,
+    g2: u1,
+    g3: u1,
+    g4: u1,
+    io_bank0: u1,
+    g6: u1,
+    g7: u1,
+    g8: u1,
+    g9: u1,
+    g10: u1,
+    pads_bank0: u1,
+    g12: u1,
+    g13: u1,
+    g14: u1,
+    g15: u1,
+    g16: u1,
+    g17: u1,
+    g18: u1,
+    g19: u1,
+    g20: u1,
+    timer: u1,
+    g22: u1,
+    g23: u1,
+    g24: u1,
+    g25: u1,
+    g26: u1,
+    g27: u1,
+    g28: u1,
+    g29: u1,
+    g30: u1,
+    g31: u1,
+};
 
-const SIO_BASE: usize = 0xd0000000;
-const SIO_GPIO_OUT_SET: *volatile u32 = @ptrFromInt(SIO_BASE + 0x14);
-const SIO_GPIO_OUT_CLR: *volatile u32 = @ptrFromInt(SIO_BASE + 0x18);
-const SIO_GPIO_OE_SET: *volatile u32 = @ptrFromInt(SIO_BASE + 0x24);
-const SIO_GPIO_IN: *volatile u32 = @ptrFromInt(SIO_BASE + 0x28); // Real-time Pin State Vector
+const GpioCtrlReg = packed struct(u32) {
+    funcsel: u5,
+    reserved1: u3,
+    outover: u2,
+    reserved2: u2,
+    oeover: u2,
+    reserved3: u2,
+    inover: u2,
+    reserved4: u14,
+};
 
-const IO_BANK0_BASE: usize = 0x40014000;
-const IO_BANK0_GPIO17_CTRL: *volatile u32 = @ptrFromInt(IO_BANK0_BASE + 0x8c); // LED Pin Control
-const IO_BANK0_GPIO0_CTRL: *volatile u32 = @ptrFromInt(IO_BANK0_BASE + 0x04); // FIX: GPIO 0 Control
+const PadsQspiSsReg = packed struct(u32) {
+    reserved1: u1,
+    slewfast: u1,
+    reserved2: u2,
+    pue: u1,
+    pde: u1,
+    drive: u2,
+    ie: u1,
+    od: u1,
+    reserved3: u22,
+};
 
-const PADS_BANK0_BASE: usize = 0x4001c000;
-const PADS_BANK0_GPIO0: *volatile u32 = @ptrFromInt(PADS_BANK0_BASE + 0x04); // FIX: GPIO 0 Pad Configuration
+const SioRegs = extern struct {
+    cpuid: u32, // 0x000
+    gpio_in: u32, // 0x004
+    gpio_hi_in: u32, // 0x008
+    reserved1: u32, // 0x00c
+    gpio_out: u32, // 0x010
+    gpio_out_set: u32, // 0x014
+    gpio_out_clr: u32, // 0x018
+    gpio_out_xor: u32, // 0x01c
+    gpio_oe: u32, // 0x020
+    gpio_oe_set: u32, // 0x024
+    gpio_oe_clr: u32, // 0x028
+    gpio_oe_xor: u32, // 0x02c
+    gpio_hi_out: u32, // 0x030
+    gpio_hi_out_set: u32, // 0x034
+    gpio_hi_out_clr: u32, // 0x038
+    gpio_hi_out_xor: u32, // 0x03c
+    gpio_hi_oe: u32, // 0x040
+    gpio_hi_oe_set: u32, // 0x044
+    gpio_hi_oe_clr: u32, // 0x048
+    gpio_hi_oe_xor: u32, // 0x04c
+};
 
-const TIMER_BASE: usize = 0x40054000;
-const TIMER_TIMELR: *volatile u32 = @ptrFromInt(TIMER_BASE + 0x0c); // Raw running uS counter register
+const TimerRegs = extern struct {
+    timehw: u32,
+    timelw: u32,
+    timehr: u32,
+    timelr: u32,
+};
 
 export fn _start() callconv(.c) noreturn {
-    // 1. Unfreeze IO Bank 0 (Bit 5), PADS Bank 0 (Bit 11), and Hardware TIMER (Bit 21) from reset
-    const reset_mask: u32 = (1 << 5) | (1 << 11) | (1 << 21);
-    RESETS_RESET.* &= ~reset_mask;
-    while ((RESETS_DONE.* & reset_mask) != reset_mask) {}
+    const resets_reset: *volatile ResetsRegs = @ptrFromInt(0x4000c000);
+    const resets_done: *volatile ResetsRegs = @ptrFromInt(0x4000c008);
+    const sio: *volatile SioRegs = @ptrFromInt(0xd0000000);
+    const io_bank0_gpio17_ctrl: *volatile GpioCtrlReg = @ptrFromInt(0x4001408c);
+    const qspi_ss_ctrl: *volatile GpioCtrlReg = @ptrFromInt(0x4001800c);
+    const pads_qspi_ss: *volatile PadsQspiSsReg = @ptrFromInt(0x40020008);
+    const timer: *volatile TimerRegs = @ptrFromInt(0x40054000);
 
-    // 2. Connect GPIO 17 (LED) and GPIO 0 (Jumper Line) to SIO matrix (Function 5)
-    IO_BANK0_GPIO17_CTRL.* = 5;
-    IO_BANK0_GPIO0_CTRL.* = 5;
+    resets_reset.io_bank0 = 0;
+    resets_reset.pads_bank0 = 0;
+    resets_reset.timer = 0;
+    while (resets_done.io_bank0 == 0 or resets_done.pads_bank0 == 0 or resets_done.timer == 0) {}
 
-    // 3. Configure physical pad attributes for GPIO 0
-    // Bit 3 = Pull-up enable (PUE), Bit 2 = Pull-down disable (PDE), Bit 6 = Input Enable (IE)
-    PADS_BANK0_GPIO0.* = (1 << 3) | (1 << 6);
+    io_bank0_gpio17_ctrl.funcsel = 5;
+    sio.gpio_oe_set = (1 << 17);
 
-    // 4. Enable hardware output drive onto the LED trace
-    SIO_GPIO_OE_SET.* = (1 << 17);
+    var blink_interval_us: u32 = 500_000;
+    var target_time = timer.timelr +% blink_interval_us;
+    var was_pressed: bool = false;
 
-    // Dynamic Tracking Configuration State Machine
-    var blink_interval_us: u32 = 500_000; // Baseline: 500ms (500,000 uS)
-    var target_time = TIMER_TIMELR.* +% blink_interval_us;
-    var led_state: bool = false;
-    var wire_was_grounded: bool = false;
+    pads_qspi_ss.pue = 1;
+    qspi_ss_ctrl.oeover = 2;
 
-    // 5. Asynchronous High-Speed Processing Polling Loop
     while (true) {
-        // Read input state vector and mask specifically for Bit 0 (GPIO 0)
-        // When your jumper touches a GND pin, Bit 0 drops instantly to a logic 0.
-        const wire_is_grounded = (SIO_GPIO_IN.* & (1 << 0)) == 0;
+        const is_pressed = (sio.gpio_hi_in & (1 << 1)) == 0;
 
-        if (wire_is_grounded and !wire_was_grounded) {
-            // Edge Transition Detected! Toggle between 500ms (Slow) and 100ms (Fast)
-            blink_interval_us = if (blink_interval_us == 500_000) 100_000 else 500_000;
-            wire_was_grounded = true;
-
-            // Recalculate target slice boundaries instantly to remove toggle switching latency
-            target_time = TIMER_TIMELR.* +% blink_interval_us;
-        } else if (!wire_is_grounded) {
-            // Unlatch edge tracking the moment the jumper wire breaks contact with GND
-            wire_was_grounded = false;
+        if (is_pressed and !was_pressed) {
+            blink_interval_us ^= 403_328;
+            was_pressed = true;
+            target_time = timer.timelr +% blink_interval_us;
+        } else if (!is_pressed) {
+            was_pressed = false;
         }
 
-        // NON-BLOCKING CLOCK POLICING MAP:
-        const current_time = TIMER_TIMELR.*;
+        const current_time = timer.timelr;
         if ((current_time -% target_time) < 0x80000000) {
-            // Interval threshold breached! Flip electrical logic drives
-            if (led_state) {
-                SIO_GPIO_OUT_SET.* = (1 << 17); // Drive track high -> LED OFF (Active-LOW)
-                led_state = false;
-            } else {
-                SIO_GPIO_OUT_CLR.* = (1 << 17); // Sink track low -> LED ON (Active-LOW)
-                led_state = true;
-            }
-            // Commit exact microsecond index checkpoint target for the upcoming cycle pass
+            sio.gpio_out_xor = 1 << 17;
             target_time = current_time +% blink_interval_us;
         }
     }
